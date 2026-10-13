@@ -1,32 +1,31 @@
 import os
-import numpy as np
+import sys
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import make_pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn import metrics
 
-print("Worksheet 6.6 - Exercise 2: Diabetes Risk Classification")
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+)
 
-# Load dataset from project folder
+from common import load_csv
+
+print("Worksheet 6.6 - Exercise 1: Graduate Admission")
+
 dataset_path = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "diabetes.csv"
+    "Admission_Predict_Ver1.1.csv"
 )
 
 df = pd.read_csv(dataset_path)
 df.columns = df.columns.str.strip()
 
-# Standardize target column name
-df = df.rename(columns={"Outcome": "disease"})
-
 required = [
-    "Pregnancies", "Glucose", "BloodPressure", "SkinThickness",
-    "Insulin", "BMI", "DiabetesPedigreeFunction", "Age", "disease"
+    "Chance of Admit", "GRE Score", "CGPA", "University Rating"
 ]
 
 missing = [col for col in required if col not in df.columns]
@@ -35,82 +34,66 @@ if missing:
         f"Missing columns: {missing}\nAvailable columns: {df.columns.tolist()}"
     )
 
-df = df[required].dropna()
+data = pd.DataFrame({
+    "admit": (df["Chance of Admit"] >= 0.75).astype(int),
+    "gre": df["GRE Score"],
+    "gpa": df["CGPA"],
+    "rank": df["University Rating"]
+}).dropna()
 
-X = df.drop(columns="disease")
-y = df["disease"].astype(int)
+X = pd.concat([
+    data[["gre", "gpa"]],
+    pd.get_dummies(data["rank"], prefix="rank", dtype=int)
+], axis=1)
 
-# Replace medically implausible zero measurements with missing values
-zero_missing = [
-    "Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"
-]
-X[zero_missing] = X[zero_missing].replace(0, np.nan)
+y = data["admit"]
 
-# Split the dataset
+if y.nunique() < 2 or y.value_counts().min() < 2:
+    raise ValueError(
+        "The admission threshold produced too few examples in one class."
+    )
+
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
+    X, y, test_size=0.25, random_state=42, stratify=y
 )
 
-# Build and train the model
-model = make_pipeline(
-    SimpleImputer(strategy="median"),
-    StandardScaler(),
-    LogisticRegression(max_iter=1000, random_state=42)
-)
-
+model = LogisticRegression(C=1e4, max_iter=5000)
 model.fit(X_train, y_train)
 
-# Make predictions
 pred = model.predict(X_test)
 prob = model.predict_proba(X_test)[:, 1]
 
-# Evaluate the model
-print("\nDataset shape:", df.shape)
-print("Training records:", len(X_train))
-print("Testing records:", len(X_test))
-
 print("\nConfusion matrix:\n", metrics.confusion_matrix(y_test, pred))
 print("Accuracy:", round(metrics.accuracy_score(y_test, pred), 3))
-print("Precision:", round(metrics.precision_score(y_test, pred, zero_division=0), 3))
-print("Recall:", round(metrics.recall_score(y_test, pred, zero_division=0), 3))
-print("F1-score:", round(metrics.f1_score(y_test, pred, zero_division=0), 3))
 print("ROC-AUC:", round(metrics.roc_auc_score(y_test, prob), 3))
+print(metrics.classification_report(y_test, pred, zero_division=0))
 
-print("\nClassification report:")
-print(metrics.classification_report(
-    y_test, pred,
-    target_names=["No diabetes", "Diabetes"],
-    zero_division=0
-))
+cm = metrics.confusion_matrix(y_test, pred)
 
-# Plot confusion matrix
-metrics.ConfusionMatrixDisplay.from_predictions(
-    y_test, pred,
-    display_labels=["No diabetes", "Diabetes"],
-    cmap="Blues"
-)
-
-plt.title("Diabetes Risk Classification")
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+plt.title("Graduate Admission Confusion Matrix")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
 plt.tight_layout()
 plt.show()
 
-# Predict for an example patient
-patient = pd.DataFrame([{
-    "Pregnancies": 2,
-    "Glucose": 150,
-    "BloodPressure": 72,
-    "SkinThickness": 30,
-    "Insulin": 160,
-    "BMI": 33,
-    "DiabetesPedigreeFunction": 0.5,
-    "Age": 35
-}])
+def applicant(gre, gpa, rating):
+    row = {
+        "gre": gre,
+        "gpa": gpa,
+        **{
+            col: int(col == f"rank_{rating}")
+            for col in X.columns if col.startswith("rank_")
+        }
+    }
+    return pd.DataFrame([row]).reindex(columns=X.columns, fill_value=0)
 
-probability = model.predict_proba(patient)[0, 1]
+for rating in (5, 1):
+    probability = model.predict_proba(
+        applicant(320, 9.0, rating)
+    )[0, 1]
 
-print(
-    "\nExample patient's estimated positive-class probability:",
-    f"{probability:.1%}"
-)
-
-print("Educational model only; not a medical diagnosis.")
+    print(
+        f"Admission probability (GRE 320, CGPA 9.0, "
+        f"rating {rating}): {probability:.1%}"
+    )
